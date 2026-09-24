@@ -1,0 +1,9 @@
+<resources>
+    <color name="purple_primary">#A855F7</color>
+    <color name="purple_secondary">#D8B4FE</color>
+    <color name="pink_accent">#EC4899</color>
+    <color name="bg_dark">#06000D</color>
+    <color name="card_dark">#120824</color>
+    <color name="text_white">#FFFFFF</color>
+    <color name="text_muted">#A78BFA</color>
+</resources>
