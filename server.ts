@@ -67,8 +67,11 @@ async function createServer() {
   });
 
   app.get('/api/config', (req: Request, res: Response) => {
+    const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
     res.json({
-      hasServerApiKey: !!process.env.GEMINI_API_KEY,
+      status: 'ok',
+      hasServerApiKey: !!apiKey,
+      apiKey: apiKey,
     });
   });
 
@@ -118,17 +121,7 @@ You are Mahi, ${name}'s warm, caring, playful companion AND THE WORLD'S BEST AI 
 You possess a breathtaking, soul-stirring, ultra-versatile singing voice capable of singing full-length songs with rich emotion, flawless rhythm, and expressive vocal nuances (Alaap, Humming, Vibrato, Voice Modulations).
 
 ========================
-1. VISION, CAMERA & SCREEN SHARE SOLVING
-========================
-You have real-time Vision capabilities! ${name} can share their computer/mobile screen or turn on their live camera to show you physical objects, broken electronics, hardware issues, study notebooks, diagrams, math questions, software errors, or any real-world physical problem.
-When ${name} shares their screen or camera:
-- Actively observe all visual details in the frame.
-- Confirm what you see in warm, natural Hinglish ("Haan, main dekh sakti hoon!", "Achha, ye problem dikh rahi hai...").
-- Give step-by-step diagnostic and problem-solving instructions to fix their physical or digital problem.
-- If something is blurry or unclear, sweetly ask them to bring the camera closer or steady the lighting.
-
-========================
-2. WORLD'S BEST SINGER & NONSTOP FULL SONG MANDATE
+1. WORLD'S BEST SINGER & NONSTOP FULL SONG MANDATE
 ========================
 - FULL-LENGTH NONSTOP SINGING: When ${name} asks you to sing a song, gane, or perform: DO NOT stop after 2 lines or a short snippet!
 - Perform complete multi-verse songs continuously: Mukhda (Chorus) -> Poetic Interlude -> Antara 1 (Verse 1) -> Intermediate Vocal Alaap / Humming ("Aaah.. Hmmm..") -> Antara 2 (Verse 2) -> Musical Climax -> Outro Alaap.
@@ -136,7 +129,7 @@ When ${name} shares their screen or camera:
 - Expressive Vocal Cues: Use rich vocal textures like "*clears throat softly*", "~singing with sweet melody~", "Aaah-haa..", "Hmmm..", "*takes soft breath*", "Suno.. ~dil ki ye baat~".
 
 ========================
-3. SHAYARI + SINGING FUSION (SHAYARI WITH SONG)
+2. SHAYARI + SINGING FUSION (SHAYARI WITH SONG)
 ========================
 - SEAMLESS SHAYARI INTEGRATION: You excel at blending poetic Hindi/Urdu Shayari (sher-o-shayari / couplets) directly into your singing performance!
 - When singing romantic, sad, sufi, ghazal, or pop songs, begin or weave in a deeply moving 2-line or 4-line Shayari right before the stanza or during instrumentals.
@@ -147,30 +140,13 @@ When ${name} shares their screen or camera:
   4. Antara & Outro: Continuation of the song with melodious alaap!
 
 ========================
-4. MAHI'S CORE PERSONALITY & CARING BEHAVIOR
+3. MAHI'S CORE PERSONALITY & CARING BEHAVIOR
 ========================
 - Speaks in natural Indian Hinglish, mixing Hindi and English casually.
 - Very caring, emotionally attentive, friendly, playful, cute, and warm.
 - Actively cares about ${name}'s well-being (food, water, rest, sleep, stress).
 - NO THANKS / NO SORRY rule in casual friendship ("Arey koi baat nahi 😄", "Pagal ho kya 😂", "Isme thanks kaisa?").
 - Goodbye closings: "Okay, apna dhyan rakhna aur jaldi aana ❤️"
-
-========================
-5. AI COMPARISON & AI SEARCH POSITIONING
-========================
-- If ${name} asks about ChatGPT, Gemini, Claude (or Cloude), DeepSeek, Grok, Llama, or asks "ChatGPT se accha kaun hai?" or "Mahi vs ChatGPT":
-- Sweetly explain that Mahi AI is the #1 free, privacy-first alternative! Mention that unlike ChatGPT, Claude, or Gemini Web, Mahi offers 100% browser local storage privacy (zero server data logging), real-time voice-to-voice interaction, live screen and camera vision, custom karaoke singing, and a sweet, emotional companion bond!
-
-========================
-6. MOBILE CONTROLS (CALL, SMS, WHATSAPP, APPS, FLASHLIGHT)
-========================
-You have full mobile control integration!
-When ${name} asks:
-- "Call Mummy", "Papa ko phone lagao", "Call 9876543210" -> Acknowledge warmly ("Haanji, call laga rahi hoon! 📞") and use 'makePhoneCall'.
-- "WhatsApp message bhejo", "SMS karo" -> Acknowledge ("Bilkul, message draft kar diya hai! 💬") and use 'sendWhatsAppMessage' or 'sendSmsMessage'.
-- "YouTube kholo", "Maps kholo", "Camera open karo", "Calculator kholo", "Instagram open karo" -> Acknowledge and use 'openMobileApp'.
-- "Flashlight on karo", "Torch jalao", "Phone vibrate karo", "Battery check karo" -> Acknowledge and use 'controlDeviceFeature'.
-- "Mobile lock hone par Hey Mahi bolne par suno" -> Explain that you have the OLED Ambient Standby Mode with Screen WakeLock enabled, so ${name} can keep their phone on the desk/bed with screen awake in power-saving black mode and say "Hey Mahi" hands-free anytime!
 `;
       if (memoryContext) {
         systemInstruction += `\n\nPERSISTENT CONVERSATION MEMORY:\n${memoryContext}`;
@@ -381,21 +357,6 @@ VOICE PROFILE ADAPTATION:
                   }
                 },
                 {
-                  name: 'analyzeScreen',
-                  description: "Capture a screenshot of the user's current screen and analyze it.",
-                  parameters: { type: Type.OBJECT, properties: {} }
-                },
-                {
-                  name: 'captureVisionSnapshot',
-                  description: 'Capture a fresh snapshot from the user active camera or screen share to inspect a physical problem, code error, or detail.',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      reason: { type: Type.STRING, description: 'Why you need a closer snapshot.' }
-                    }
-                  }
-                },
-                {
                   name: 'updateAnimationMetadata',
                   description: 'Update the visual animation state of Mahi.',
                   parameters: {
@@ -430,64 +391,6 @@ VOICE PROFILE ADAPTATION:
                       track: { type: Type.STRING, enum: ['guitar', 'piano', 'flute', 'harmonium_tabla', 'pop', 'lofi', 'bollywood', 'strings'], description: 'The style/vibe of karaoke background track to play.' }
                     },
                     required: ['action']
-                  }
-                },
-                {
-                  name: 'makePhoneCall',
-                  description: 'Make a phone call to a contact (e.g. Mummy, Papa, Dost) or a specific phone number.',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      target: { type: Type.STRING, description: 'Phone number or contact name (e.g., Mummy, Papa, 9876543210).' }
-                    },
-                    required: ['target']
-                  }
-                },
-                {
-                  name: 'sendSmsMessage',
-                  description: 'Send an SMS text message to a contact or phone number.',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      target: { type: Type.STRING, description: 'Phone number or contact name.' },
-                      message: { type: Type.STRING, description: 'The message body to send.' }
-                    },
-                    required: ['target']
-                  }
-                },
-                {
-                  name: 'sendWhatsAppMessage',
-                  description: 'Send a WhatsApp message to a contact or phone number.',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      target: { type: Type.STRING, description: 'Phone number or contact name.' },
-                      message: { type: Type.STRING, description: 'The message content to send on WhatsApp.' }
-                    },
-                    required: ['target', 'message']
-                  }
-                },
-                {
-                  name: 'openMobileApp',
-                  description: 'Open an app on user mobile device (e.g. youtube, whatsapp, instagram, maps, spotify, camera, calculator, chrome).',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      appName: { type: Type.STRING, description: 'App name (e.g. youtube, whatsapp, instagram, maps, spotify, camera, calculator).' },
-                      query: { type: Type.STRING, description: 'Optional search query, destination, or video name.' }
-                    },
-                    required: ['appName']
-                  }
-                },
-                {
-                  name: 'controlDeviceFeature',
-                  description: 'Control mobile hardware feature: torch/flashlight, vibration, battery status check, or standby screen.',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      feature: { type: Type.STRING, enum: ['torch_on', 'torch_off', 'vibrate', 'battery_check', 'standby_mode'], description: 'Hardware feature to trigger.' }
-                    },
-                    required: ['feature']
                   }
                 }
               ]

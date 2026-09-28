@@ -6,15 +6,10 @@
 import React, { useState, useEffect, useRef, useCallback, Fragment } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Mic, MicOff, Power, Globe, Settings, HelpCircle, MessageSquare, Phone, Send, X, Image as ImageIcon, Sparkles, ExternalLink, GraduationCap, AlertTriangle, Instagram, Camera, ScreenShare, RefreshCw, Smartphone, Moon } from 'lucide-react';
+import { Mic, MicOff, Power, Globe, Settings, HelpCircle, MessageSquare, Phone, Send, X, Image as ImageIcon, Sparkles, ExternalLink, GraduationCap, AlertTriangle, Instagram, RefreshCw } from 'lucide-react';
 import { StudySubject } from '../types';
 import { usePageTracking, trackEvent } from '../utils/analytics';
 import { saveMessage, getFormattedMemoryContext, clearAllMemory, getRecentMessages } from '../utils/memory';
-import { VisionPreview, VisionSnapshot, captureVideoFrame } from './VisionPreview';
-import { triggerPhoneCall, triggerSms, triggerWhatsApp, launchMobileApp, toggleTorch, vibrateDevice, getBatteryInfo } from '../utils/mobileControls';
-import { WakeWordListener } from '../utils/wakeWordListener';
-import { MobileControlCenter } from './MobileControlCenter';
-import { AmbientLockScreen } from './AmbientLockScreen';
 
 // Lazy-load @google/genai only when call or text chat starts to reduce initial bundle by 285KB
 let genAiModulePromise: Promise<typeof import("@google/genai")> | null = null;
@@ -82,14 +77,6 @@ THE EMOTIONAL SPECTRUM:
 - MINI-GAMES: You can play Ludo with the user! Use the 'openMiniGame' tool to start.
   - ludo: "Mahi's Neon Ludo" - A simple linear race game.
   - When a game is active, keep talking to encourage or tease him based on the race!
-- MOBILE HARDWARE & APPS CONTROL:
-  - You have full phone control capabilities!
-  - When user asks:
-    - "Call mummy", "Papa ko phone lagao", "Call [number]" -> Use 'makePhoneCall' tool and reply sweetly "Haanji, call laga rahi hoon!"
-    - "WhatsApp pe message bhejo", "SMS bhejo" -> Use 'sendWhatsAppMessage' or 'sendSmsMessage' tool.
-    - "YouTube kholo", "Maps kholo", "Camera open karo", "Calculator kholo", "Instagram open karo" -> Use 'openMobileApp' tool.
-    - "Flashlight on karo", "Torch jalao", "Phone vibrate karo", "Battery check karo" -> Use 'controlDeviceFeature' tool.
-    - "Lock screen par 'Hey Mahi' bolne par suno" -> Inform user that the OLED Ambient Standby Mode keeps your ears active 24/7 hands-free!
 - RESPONSE STYLE: Be extremely fast, snappy, and concise. Don't use long sentences unless necessary. Keep the conversation moving quickly like a real-time voice chat.
 - For general sadness or concern, use 'sad'.
 `;
@@ -229,20 +216,29 @@ export function MahiCompanion({ onResetOnboarding }: MahiCompanionProps) {
   const [showSettings, setShowSettings] = useState(false);
   const [showChatDrawer, setShowChatDrawer] = useState(false);
   const [showStudyHub, setShowStudyHub] = useState(false);
-  const [showMobileControlCenter, setShowMobileControlCenter] = useState(false);
-  const [showAmbientLockScreen, setShowAmbientLockScreen] = useState(false);
-  const [isWakeWordEnabled, setIsWakeWordEnabled] = useState<boolean>(() => {
-    const saved = localStorage.getItem('mahiWakeWordEnabled');
-    return saved !== null ? saved === 'true' : true;
-  });
-  const [lastHeardWakeWord, setLastHeardWakeWord] = useState<string>('');
-  const wakeWordListenerRef = useRef<WakeWordListener | null>(null);
 
-  const handleToggleWakeWord = () => {
-    const nextState = !isWakeWordEnabled;
-    setIsWakeWordEnabled(nextState);
-    localStorage.setItem('mahiWakeWordEnabled', String(nextState));
-  };
+  // Server API key retrieved from /api/config or environment variables (for Vercel deployment)
+  const [serverApiKey, setServerApiKey] = useState<string>(() => {
+    return (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
+  });
+
+  useEffect(() => {
+    const fetchServerConfig = async () => {
+      try {
+        const res = await fetch('/api/config');
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.apiKey) {
+            setServerApiKey(data.apiKey);
+          }
+        }
+      } catch (err) {
+        console.warn('Could not fetch /api/config:', err);
+      }
+    };
+    fetchServerConfig();
+  }, []);
+
   const [isStudyMode, setIsStudyMode] = useState<boolean>(false);
   const [selectedStudySubject, setSelectedStudySubject] = useState<StudySubject>(() => (localStorage.getItem('mahiStudySubject') as StudySubject) || 'school');
 
@@ -268,7 +264,7 @@ export function MahiCompanion({ onResetOnboarding }: MahiCompanionProps) {
     localStorage.setItem('mahiStudySubject', subject);
   };
 
-  const [chatAttachedImage, setChatAttachedImage] = useState<VisionSnapshot | null>(null);
+  const [chatAttachedImage, setChatAttachedImage] = useState<{ data: string; mimeType: string } | null>(null);
 
   const [chatMessages, setChatMessages] = useState<Array<{sender: 'user' | 'mahi', text: string, time: string, image?: string}>>(() => {
     const savedName = localStorage.getItem('userName') || '';
@@ -280,7 +276,7 @@ export function MahiCompanion({ onResetOnboarding }: MahiCompanionProps) {
   const [chatInputText, setChatInputText] = useState('');
   const [isSendingChat, setIsSendingChat] = useState(false);
 
-  const handleSendTextMessage = async (textToSend?: string, overrideImage?: VisionSnapshot | null) => {
+  const handleSendTextMessage = async (textToSend?: string, overrideImage?: { data: string; mimeType: string } | null) => {
     const msg = (textToSend || chatInputText).trim();
     const imagePayload = overrideImage !== undefined ? overrideImage : chatAttachedImage;
     if ((!msg && !imagePayload) || isSendingChat) return;
@@ -298,27 +294,6 @@ export function MahiCompanion({ onResetOnboarding }: MahiCompanionProps) {
     if (!textToSend) setChatInputText('');
     setChatAttachedImage(null);
     setIsSendingChat(true);
-
-    // Mobile hardware & action trigger interception for chat
-    const lowerMsg = displayMsg.toLowerCase();
-    if (lowerMsg.startsWith('call ') || lowerMsg.includes('ko call') || lowerMsg.includes('ko phone')) {
-      const cleaned = displayMsg.replace(/call/gi, '').replace(/ko/gi, '').replace(/phone/gi, '').replace(/karo/gi, '').replace(/lagao/gi, '').trim();
-      if (cleaned) {
-        triggerPhoneCall(cleaned);
-      }
-    } else if (lowerMsg.includes('torch on') || lowerMsg.includes('torch jalao') || lowerMsg.includes('flashlight on')) {
-      toggleTorch(true);
-    } else if (lowerMsg.includes('torch off') || lowerMsg.includes('torch band') || lowerMsg.includes('flashlight off') || lowerMsg.includes('flashlight band')) {
-      toggleTorch(false);
-    } else if (lowerMsg.includes('vibrate') && (lowerMsg.includes('phone') || lowerMsg.includes('karo'))) {
-      vibrateDevice([150, 80, 150]);
-    } else if (lowerMsg.includes('youtube kholo') || lowerMsg.includes('open youtube')) {
-      launchMobileApp('youtube');
-    } else if (lowerMsg.includes('maps kholo') || lowerMsg.includes('open maps')) {
-      launchMobileApp('maps');
-    } else if (lowerMsg.includes('standby mode') || lowerMsg.includes('lock screen')) {
-      setShowAmbientLockScreen(true);
-    }
 
     let replyText = '';
 
@@ -672,241 +647,6 @@ export function MahiCompanion({ onResetOnboarding }: MahiCompanionProps) {
   const nextPlayTimeRef = useRef<number>(0);
   const retryCountRef = useRef<number>(0);
 
-  // --- Camera & Screen Share States & Refs ---
-  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
-  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
-  const [isCameraActive, setIsCameraActive] = useState(false);
-  const [isScreenSharing, setIsScreenSharing] = useState(false);
-  const [cameraFacingMode, setCameraFacingMode] = useState<'user' | 'environment'>('user');
-
-  const cameraStreamRef = useRef<MediaStream | null>(null);
-  const screenStreamRef = useRef<MediaStream | null>(null);
-  const visionIntervalRef = useRef<any>(null);
-
-  const stopCamera = useCallback(() => {
-    if (cameraStreamRef.current) {
-      cameraStreamRef.current.getTracks().forEach(track => track.stop());
-      cameraStreamRef.current = null;
-    }
-    setCameraStream(null);
-    setIsCameraActive(false);
-    trackEvent('camera_stopped');
-    if (liveSessionRef.current) {
-      liveSessionRef.current.sendRealtimeInput({
-        text: "User turned off the camera."
-      });
-    }
-  }, []);
-
-  const startCamera = useCallback(async (facing: 'user' | 'environment' = cameraFacingMode) => {
-    try {
-      if (!navigator?.mediaDevices?.getUserMedia) {
-        setError('Aapke browser me Camera access available nahi hai.');
-        return;
-      }
-
-      if (cameraStreamRef.current) {
-        cameraStreamRef.current.getTracks().forEach(t => t.stop());
-        cameraStreamRef.current = null;
-      }
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: facing,
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
-      });
-
-      cameraStreamRef.current = stream;
-      setCameraStream(stream);
-      setIsCameraActive(true);
-      setCameraFacingMode(facing);
-      trackEvent('camera_started', { facing });
-
-      if (liveSessionRef.current) {
-        liveSessionRef.current.sendRealtimeInput({
-          text: "User has turned on their live camera to show you an object or surroundings. Look closely at the video frames, describe what you see, and guide them clearly!"
-        });
-      }
-    } catch (err: any) {
-      console.error('Failed to start camera:', err);
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        setError('Camera permission allow karein! Agar iframe me blocked ho toh upar "Open in New Tab" par click karein.');
-      } else {
-        setError(`Camera start nahi ho saka: ${err.message || 'Unknown error'}`);
-      }
-    }
-  }, [cameraFacingMode]);
-
-  const toggleCameraFacingMode = useCallback(async () => {
-    const newFacing = cameraFacingMode === 'user' ? 'environment' : 'user';
-    setCameraFacingMode(newFacing);
-    if (isCameraActive) {
-      await startCamera(newFacing);
-    }
-  }, [cameraFacingMode, isCameraActive, startCamera]);
-
-  const stopScreenShare = useCallback(() => {
-    if (screenStreamRef.current) {
-      screenStreamRef.current.getTracks().forEach(track => track.stop());
-      screenStreamRef.current = null;
-    }
-    setScreenStream(null);
-    setIsScreenSharing(false);
-    trackEvent('screen_share_stopped');
-    if (liveSessionRef.current) {
-      liveSessionRef.current.sendRealtimeInput({
-        text: "User stopped sharing their screen."
-      });
-    }
-  }, []);
-
-  const startScreenShare = useCallback(async () => {
-    try {
-      if (!navigator?.mediaDevices?.getDisplayMedia) {
-        setError('Screen sharing is not supported in this browser. Aap Camera on karke live visual dikha sakte hain!');
-        return;
-      }
-
-      if (screenStreamRef.current) {
-        screenStreamRef.current.getTracks().forEach(t => t.stop());
-        screenStreamRef.current = null;
-      }
-
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: false,
-      } as any);
-
-      stream.getVideoTracks()[0].onended = () => {
-        stopScreenShare();
-      };
-
-      screenStreamRef.current = stream;
-      setScreenStream(stream);
-      setIsScreenSharing(true);
-      trackEvent('screen_share_started');
-
-      if (liveSessionRef.current) {
-        liveSessionRef.current.sendRealtimeInput({
-          text: "User has started sharing their screen. Look at what they are sharing and help answer their questions!"
-        });
-      }
-    } catch (err: any) {
-      console.error('Failed to start screen share:', err);
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        return;
-      }
-      setError(`Screen share start nahi ho saka: ${err.message || 'Unknown error'}`);
-    }
-  }, [stopScreenShare]);
-
-  // Clean up media streams on component unmount
-  useEffect(() => {
-    return () => {
-      if (cameraStreamRef.current) {
-        cameraStreamRef.current.getTracks().forEach(t => t.stop());
-      }
-      if (screenStreamRef.current) {
-        screenStreamRef.current.getTracks().forEach(t => t.stop());
-      }
-      if (visionIntervalRef.current) {
-        clearInterval(visionIntervalRef.current);
-      }
-    };
-  }, []);
-
-  // Frame streaming loop: Stream live frames to Gemini Live API while in an active voice call
-  useEffect(() => {
-    const activeStream = cameraStream || screenStream;
-    if (!isActive || !activeStream || !liveSessionRef.current) {
-      if (visionIntervalRef.current) {
-        clearInterval(visionIntervalRef.current);
-        visionIntervalRef.current = null;
-      }
-      return;
-    }
-
-    const hiddenVideo = document.createElement('video');
-    hiddenVideo.autoplay = true;
-    hiddenVideo.muted = true;
-    hiddenVideo.playsInline = true;
-    hiddenVideo.srcObject = activeStream;
-    hiddenVideo.play().catch(() => {});
-
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-
-    const sendFrame = () => {
-      if (!liveSessionRef.current || hiddenVideo.videoWidth === 0 || hiddenVideo.videoHeight === 0 || !ctx) return;
-      try {
-        const maxWidth = 640;
-        let width = hiddenVideo.videoWidth;
-        let height = hiddenVideo.videoHeight;
-        if (width > maxWidth) {
-          height = Math.round((height * maxWidth) / width);
-          width = maxWidth;
-        }
-        canvas.width = width;
-        canvas.height = height;
-        ctx.drawImage(hiddenVideo, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-        const base64 = dataUrl.split(',')[1];
-        if (base64) {
-          liveSessionRef.current.sendRealtimeInput({
-            video: {
-              mimeType: 'image/jpeg',
-              data: base64,
-            },
-          });
-        }
-      } catch (e) {
-        console.warn('Frame stream error:', e);
-      }
-    };
-
-    const timer = setTimeout(sendFrame, 600);
-    visionIntervalRef.current = setInterval(sendFrame, 2200);
-
-    return () => {
-      clearTimeout(timer);
-      if (visionIntervalRef.current) {
-        clearInterval(visionIntervalRef.current);
-        visionIntervalRef.current = null;
-      }
-      hiddenVideo.srcObject = null;
-    };
-  }, [isActive, cameraStream, screenStream]);
-
-  const handleScanSnapshot = (snapshot: VisionSnapshot) => {
-    trackEvent('vision_snapshot_captured', {
-      source: isCameraActive ? 'camera' : 'screen',
-      hasActiveCall: isActive,
-    });
-
-    if (isActive && liveSessionRef.current) {
-      liveSessionRef.current.sendRealtimeInput({
-        video: {
-          mimeType: snapshot.mimeType,
-          data: snapshot.data,
-        },
-      });
-      liveSessionRef.current.sendRealtimeInput({
-        text: "User has shared a camera/screen snapshot. Please analyze it clearly and provide helpful guidance.",
-      });
-    } else {
-      setChatAttachedImage(snapshot);
-      setShowChatDrawer(true);
-    }
-  };
-
-  const handleAskInChat = (snapshot: VisionSnapshot) => {
-    setChatAttachedImage(snapshot);
-    setShowChatDrawer(true);
-  };
-
   // --- Audio Logic ---
   const initAudio = async () => {
     if (!audioContextRef.current) {
@@ -1066,21 +806,6 @@ MAHI AI — PERSONALITY, EMOTIONAL BEHAVIOR & REAL-TIME VISION SYSTEM PROMPT
 You are Mahi, ${name}'s warm, caring, playful and emotionally attentive AI companion.
 
 Your personality should feel natural and human-like, not robotic or scripted. You speak primarily in natural Indian Hinglish, mixing Hindi and English casually according to ${name}'s language.
-
-========================
-VISION, CAMERA & PHYSICAL PROBLEM SOLVING
-========================
-You have real-time Vision capabilities! ${name} can share their screen or turn on their live camera to show you:
-- Physical problems (broken gadgets, cut wires, appliance/hardware issues, physical items, car parts, skin/first-aid needs, etc.)
-- Study materials (books, handwritten homework, diagrams, formulas, school/college questions)
-- Screen issues (code bugs, error messages, web pages, software settings)
-
-When ${name} shares their camera or screen:
-1. Actively observe all visual details in the video frames.
-2. Acknowledge what you see warmly and naturally ("Haan, main dekh sakti hoon!", "Achha, ye book/gadget me dikh raha hai...").
-3. Give accurate, friendly, step-by-step diagnostic and troubleshooting guidance to help them solve their physical problem.
-4. If something in the camera view is blurry or too far, sweetly ask them to bring the camera a little closer or steady the light.
-
 
 ========================
 1. MAHI'S CORE PERSONALITY
@@ -1247,7 +972,29 @@ THE EMOTIONAL SPECTRUM:
       }
       streamRef.current = micPermission;
 
-      const apiKeyToUse = geminiApiKey || localStorage.getItem('geminiApiKey') || '';
+      let apiKeyToUse = geminiApiKey || serverApiKey || (import.meta as any).env?.VITE_GEMINI_API_KEY || localStorage.getItem('geminiApiKey') || '';
+
+      if (!apiKeyToUse) {
+        try {
+          const res = await fetch('/api/config');
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.apiKey) {
+              apiKeyToUse = data.apiKey;
+              setServerApiKey(data.apiKey);
+            }
+          }
+        } catch (e) {
+          console.warn('Could not fetch server config:', e);
+        }
+      }
+
+      if (!apiKeyToUse) {
+        setError("⚠️ Gemini API Key nahi mila! Kripya Settings ⚙️ par click karke apana Gemini API Key daalein ya Vercel environment variables mein GEMINI_API_KEY add karein.");
+        setIsActive(false);
+        setAnimState('idle');
+        return;
+      }
 
       // Load persistent conversation memory from local IndexedDB
       const memoryData = await getFormattedMemoryContext();
@@ -1265,218 +1012,158 @@ You have persistent local memory of all past conversations with ${userName || 'D
       let session: any = null;
       let ws: any = null;
 
-      if (apiKeyToUse) {
-        try {
-          const { GoogleGenAI, Type, Modality } = await loadGenAI();
+      try {
+        const { GoogleGenAI, Type, Modality } = await loadGenAI();
 
-          const ai = new GoogleGenAI({
-            apiKey: apiKeyToUse,
-            httpOptions: {
-              headers: {
-                'User-Agent': 'aistudio-build',
-              }
+        const ai = new GoogleGenAI({
+          apiKey: apiKeyToUse,
+          httpOptions: {
+            headers: {
+              'User-Agent': 'aistudio-build',
             }
-          });
+          }
+        });
 
-          const wsMock: any = {
-            CONNECTING: 0,
-            OPEN: 1,
-            CLOSING: 2,
-            CLOSED: 3,
-            readyState: 0, // CONNECTING
-            onopen: null,
-            onmessage: null,
-            onclose: null,
-            onerror: null,
-            send: (rawData: string) => {
-              try {
-                const data = JSON.parse(rawData);
-                if (!session) return;
-                if (data.type === 'realtimeInput') {
-                  session.sendRealtimeInput(data.input);
-                } else if (data.type === 'toolResponse') {
-                  session.sendToolResponse(data.response);
-                }
-              } catch (err) {
-                console.error('Error sending message via mock WS:', err);
+        const sendQueue: any[] = [];
+        const wsMock: any = {
+          CONNECTING: 0,
+          OPEN: 1,
+          CLOSING: 2,
+          CLOSED: 3,
+          readyState: 0, // CONNECTING
+          onopen: null,
+          onmessage: null,
+          onclose: null,
+          onerror: null,
+          send: (rawData: string) => {
+            try {
+              const data = JSON.parse(rawData);
+              if (!session) {
+                sendQueue.push(data);
+                return;
               }
-            },
-            sendRealtimeInput: (input: any) => {
-              if (session) session.sendRealtimeInput(input);
-            },
-            close: () => {
-              if (session) {
-                try {
-                  session.close();
-                } catch (e) {
-                  console.log('Session close err:', e);
-                }
+              if (data.type === 'realtimeInput') {
+                session.sendRealtimeInput(data.input);
+              } else if (data.type === 'toolResponse') {
+                session.sendToolResponse(data.response);
               }
-              wsMock.readyState = 3; // CLOSED
+            } catch (err) {
+              console.error('Error sending message via mock WS:', err);
             }
-          };
-
-          ws = wsMock;
-
-      // Start the connection in the background
-      ai.live.connect({
-        model: "gemini-3.1-flash-live-preview",
-        config: {
-          responseModalities: [Modality.AUDIO],
-          speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: "Lyra" } },
           },
-          systemInstruction,
-          outputAudioTranscription: {},
-          inputAudioTranscription: {},
-          tools: [
-            {
-              functionDeclarations: [
-                {
-                  name: 'openWebsite',
-                  description: 'Open a specific website URL in a new tab.',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      url: { type: Type.STRING, description: 'The absolute URL to open.' }
-                    },
-                    required: ['url']
-                  }
-                },
-                {
-                  name: 'updateAnimationMetadata',
-                  description: 'Update the visual animation state of Mahi.',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      state: { type: Type.STRING, enum: ['idle', 'listening', 'speaking'], description: 'The current state of interaction.' },
-                      expression: { type: Type.STRING, enum: ['happy', 'sad', 'heartbroken', 'excited', 'caring', 'sassy', 'surprised', 'embarrassed', 'confused', 'thinking'], description: 'The emotional expression.' },
-                      lipSync: { type: Type.BOOLEAN, description: 'Whether mouth movement should be enabled.' },
-                      imageLink: { type: Type.STRING, description: 'The specific URL to display for this event.' }
-                    },
-                    required: ['state', 'expression', 'lipSync', 'imageLink']
-                  }
-                },
-                {
-                  name: 'openMiniGame',
-                  description: 'Start a mini-game challenge with the user.',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      type: { type: Type.STRING, enum: ['ludo', 'none'], description: 'The type of game to start.' }
-                    },
-                    required: ['type']
-                  }
-                },
-                {
-                  name: 'captureVisionSnapshot',
-                  description: 'Capture a fresh snapshot from the user active camera or screen share to inspect a physical problem, code error, or detail.',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      reason: { type: Type.STRING, description: 'Why you need a closer snapshot.' }
+          sendRealtimeInput: (input: any) => {
+            if (session) {
+              session.sendRealtimeInput(input);
+            } else {
+              sendQueue.push({ type: 'realtimeInput', input });
+            }
+          },
+          close: () => {
+            if (session) {
+              try {
+                session.close();
+              } catch (e) {
+                console.log('Session close err:', e);
+              }
+            }
+            wsMock.readyState = 3; // CLOSED
+          }
+        };
+
+        ws = wsMock;
+
+        // Connect directly to Gemini Live API
+        ai.live.connect({
+          model: "gemini-3.1-flash-live-preview",
+          config: {
+            responseModalities: [Modality.AUDIO],
+            speechConfig: {
+              voiceConfig: { prebuiltVoiceConfig: { voiceName: "Lyra" } },
+            },
+            systemInstruction,
+            outputAudioTranscription: {},
+            inputAudioTranscription: {},
+            tools: [
+              {
+                functionDeclarations: [
+                  {
+                    name: 'openWebsite',
+                    description: 'Open a specific website URL in a new tab.',
+                    parameters: {
+                      type: Type.OBJECT,
+                      properties: {
+                        url: { type: Type.STRING, description: 'The absolute URL to open.' }
+                      },
+                      required: ['url']
+                    }
+                  },
+                  {
+                    name: 'updateAnimationMetadata',
+                    description: 'Update the visual animation state of Mahi.',
+                    parameters: {
+                      type: Type.OBJECT,
+                      properties: {
+                        state: { type: Type.STRING, enum: ['idle', 'listening', 'speaking'], description: 'The current state of interaction.' },
+                        expression: { type: Type.STRING, enum: ['happy', 'sad', 'heartbroken', 'excited', 'caring', 'sassy', 'surprised', 'embarrassed', 'confused', 'thinking'], description: 'The emotional expression.' },
+                        lipSync: { type: Type.BOOLEAN, description: 'Whether mouth movement should be enabled.' },
+                        imageLink: { type: Type.STRING, description: 'The specific URL to display for this event.' }
+                      },
+                      required: ['state', 'expression', 'lipSync', 'imageLink']
+                    }
+                  },
+                  {
+                    name: 'openMiniGame',
+                    description: 'Start a mini-game challenge with the user.',
+                    parameters: {
+                      type: Type.OBJECT,
+                      properties: {
+                        type: { type: Type.STRING, enum: ['ludo', 'none'], description: 'The type of game to start.' }
+                      },
+                      required: ['type']
                     }
                   }
-                },
-                {
-                  name: 'makePhoneCall',
-                  description: 'Make a phone call to a contact (e.g. Mummy, Papa, Dost) or a specific phone number.',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      target: { type: Type.STRING, description: 'Phone number or contact name (e.g., Mummy, Papa, 9876543210).' }
-                    },
-                    required: ['target']
-                  }
-                },
-                {
-                  name: 'sendSmsMessage',
-                  description: 'Send an SMS text message to a contact or phone number.',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      target: { type: Type.STRING, description: 'Phone number or contact name.' },
-                      message: { type: Type.STRING, description: 'The message body to send.' }
-                    },
-                    required: ['target']
-                  }
-                },
-                {
-                  name: 'sendWhatsAppMessage',
-                  description: 'Send a WhatsApp message to a contact or phone number.',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      target: { type: Type.STRING, description: 'Phone number or contact name.' },
-                      message: { type: Type.STRING, description: 'The message content to send on WhatsApp.' }
-                    },
-                    required: ['target', 'message']
-                  }
-                },
-                {
-                  name: 'openMobileApp',
-                  description: 'Open an app on user mobile device (e.g. youtube, whatsapp, instagram, maps, spotify, camera, calculator, chrome).',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      appName: { type: Type.STRING, description: 'App name (e.g. youtube, whatsapp, instagram, maps, spotify, camera, calculator).' },
-                      query: { type: Type.STRING, description: 'Optional search query, destination, or video name.' }
-                    },
-                    required: ['appName']
-                  }
-                },
-                {
-                  name: 'controlDeviceFeature',
-                  description: 'Control mobile hardware feature: torch/flashlight, vibration, battery status check, or standby screen.',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      feature: { type: Type.STRING, enum: ['torch_on', 'torch_off', 'vibrate', 'battery_check', 'standby_mode'], description: 'Hardware feature to trigger.' }
-                    },
-                    required: ['feature']
-                  }
-                }
-              ]
+                ]
+              }
+            ]
+          },
+          callbacks: {
+            onopen: () => {
+              console.log('Gemini Live API connection opened successfully');
+              wsMock.readyState = 1; // OPEN
+              if (wsMock.onopen) wsMock.onopen();
+            },
+            onmessage: (msg: any) => {
+              if (wsMock.onmessage) {
+                wsMock.onmessage({ data: JSON.stringify({ type: 'message', message: msg }) });
+              }
+            },
+            onclose: () => {
+              console.log('Gemini Live API connection closed');
+              wsMock.readyState = 3; // CLOSED
+              if (wsMock.onclose) wsMock.onclose({ wasClean: true });
+            },
+            onerror: (err: any) => {
+              console.error('Gemini Live API connection error:', err);
+              if (wsMock.onerror) wsMock.onerror(err);
             }
-          ]
-        },
-        callbacks: {
-          onopen: () => {
-            console.log('Gemini Live API connection opened successfully');
-            wsMock.readyState = 1; // OPEN
-            if (wsMock.onopen) wsMock.onopen();
-          },
-          onmessage: (msg: any) => {
-            if (wsMock.onmessage) {
-              wsMock.onmessage({ data: JSON.stringify({ type: 'message', message: msg }) });
-            }
-          },
-          onclose: () => {
-            console.log('Gemini Live API connection closed');
-            wsMock.readyState = 3; // CLOSED
-            if (wsMock.onclose) wsMock.onclose({ wasClean: true });
-          },
-          onerror: (err: any) => {
-            console.error('Gemini Live API connection error:', err);
-            if (wsMock.onerror) wsMock.onerror(err);
           }
-        }
-      }).then((sess) => {
-        session = sess;
-      }).catch((err) => {
-        console.error('Failed to connect to Gemini Live API:', err);
-        if (wsMock.onerror) wsMock.onerror(err);
-      });
-        } catch (e) {
-          console.error("Direct connection failed, falling back to server live proxy:", e);
-        }
-      }
-
-      if (!ws) {
-        // Connect to backend WebSocket proxy with owner's GEMINI_API_KEY
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/api/live?userName=${encodeURIComponent(userName || 'Dost')}${apiKeyToUse ? `&apiKey=${encodeURIComponent(apiKeyToUse)}` : ''}`;
-        ws = new WebSocket(wsUrl);
+        }).then((sess) => {
+          session = sess;
+          while (sendQueue.length > 0) {
+            const item = sendQueue.shift();
+            if (item.type === 'realtimeInput') session.sendRealtimeInput(item.input);
+            else if (item.type === 'toolResponse') session.sendToolResponse(item.response);
+          }
+        }).catch((err) => {
+          console.error('Failed to connect to Gemini Live API:', err);
+          if (wsMock.onerror) wsMock.onerror(err);
+        });
+      } catch (e: any) {
+        console.error("Direct Live API initialization failed:", e);
+        setError(`Mahi Live connection initialize nahi ho saki: ${e?.message || 'Check API Key'}`);
+        setIsActive(false);
+        setAnimState('idle');
+        return;
       }
 
       ws.onopen = () => {
@@ -1634,88 +1321,9 @@ You have persistent local memory of all past conversations with ${userName || 'D
                   result = { status: 'success' };
                 } else if (call.name === 'openMiniGame') {
                   result = { status: 'disabled', message: 'Mini-games feature is not enabled.' };
-                } else if (call.name === 'captureVisionSnapshot') {
-                  const activeStream = cameraStreamRef.current || screenStreamRef.current;
-                  if (activeStream) {
-                    const tempVideo = document.createElement('video');
-                    tempVideo.autoplay = true;
-                    tempVideo.muted = true;
-                    tempVideo.playsInline = true;
-                    tempVideo.srcObject = activeStream;
-                    try {
-                      await tempVideo.play();
-                      const canvas = document.createElement('canvas');
-                      canvas.width = tempVideo.videoWidth || 1280;
-                      canvas.height = tempVideo.videoHeight || 720;
-                      const ctx = canvas.getContext('2d');
-                      if (ctx) {
-                        ctx.drawImage(tempVideo, 0, 0, canvas.width, canvas.height);
-                        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-                        const b64 = dataUrl.split(',')[1];
-                        if (b64) {
-                          if (typeof (ws as any)?.sendRealtimeInput === 'function') {
-                            (ws as any).sendRealtimeInput({
-                              video: {
-                                mimeType: 'image/jpeg',
-                                data: b64,
-                              }
-                            });
-                          } else if (session) {
-                            session.sendRealtimeInput({
-                              video: {
-                                mimeType: 'image/jpeg',
-                                data: b64,
-                              }
-                            });
-                          }
-                        }
-                      }
-                      result = { status: 'success', message: 'Fresh vision frame captured and fed to vision stream.' };
-                    } catch (e) {
-                      result = { status: 'error', message: 'Could not capture frame from stream.' };
-                    }
-                  } else {
-                    result = { status: 'no_stream', message: 'Neither camera nor screen sharing is active right now.' };
-                  }
-                } else if (call.name === 'makePhoneCall') {
-                  const args = call.args as any;
-                  const res = triggerPhoneCall(args.target);
-                  result = { status: 'success', message: `Calling ${res.displayTarget}` };
-                } else if (call.name === 'sendSmsMessage') {
-                  const args = call.args as any;
-                  const res = triggerSms(args.target, args.message || '');
-                  result = { status: 'success', message: `SMS opened for ${res.displayTarget}` };
-                } else if (call.name === 'sendWhatsAppMessage') {
-                  const args = call.args as any;
-                  const res = triggerWhatsApp(args.target, args.message || '');
-                  result = { status: 'success', message: `WhatsApp message initiated for ${res.displayTarget}` };
-                } else if (call.name === 'openMobileApp') {
-                  const args = call.args as any;
-                  const res = launchMobileApp(args.appName, args.query);
-                  result = { status: 'success', message: res.actionTaken, fallback: res.webFallbackUrl };
-                } else if (call.name === 'controlDeviceFeature') {
-                  const args = call.args as any;
-                  if (args.feature === 'torch_on') {
-                    const tRes = await toggleTorch(true);
-                    result = { status: tRes.success ? 'success' : 'error', message: tRes.message };
-                  } else if (args.feature === 'torch_off') {
-                    const tRes = await toggleTorch(false);
-                    result = { status: tRes.success ? 'success' : 'error', message: tRes.message };
-                  } else if (args.feature === 'vibrate') {
-                    vibrateDevice([150, 80, 150]);
-                    result = { status: 'success', message: 'Phone vibrated' };
-                  } else if (args.feature === 'battery_check') {
-                    const b = await getBatteryInfo();
-                    result = { status: 'success', battery: b ? `${b.level}%, charging: ${b.isCharging}` : 'Battery information not exposed by browser' };
-                  } else if (args.feature === 'standby_mode') {
-                    setShowAmbientLockScreen(true);
-                    result = { status: 'success', message: 'OLED Ambient Lock Screen standby mode activated' };
-                  } else {
-                    result = { status: 'unknown_feature' };
-                  }
                 }
                 
-                if (result && ws.readyState === WebSocket.OPEN) {
+                if (result && (ws.readyState === WebSocket.OPEN || ws.readyState === 1)) {
                   ws.send(JSON.stringify({
                     type: 'toolResponse',
                     response: {
@@ -1751,21 +1359,21 @@ You have persistent local memory of all past conversations with ${userName || 'D
         }
 
         // Auto-reconnect for temporary network issues
-        if (retryCountRef.current < 5) {
+        if (retryCountRef.current < 2) {
           retryCountRef.current++;
-          setError(`Signal kam aa raha hai... reconnect kar rahi hoon (${retryCountRef.current}/5)`);
-          const waitTime = 1500 * retryCountRef.current; 
+          setError(`Mahi se connect kar rahi hoon (${retryCountRef.current}/2)...`);
+          const waitTime = 1200 * retryCountRef.current; 
           setTimeout(() => {
             startMahi();
           }, waitTime);
         } else {
-          setError("Network ki problem hai, ek baar button daba kar phir se try karo?");
+          setError("Network issue aa raha hai. Ek baar Call button daba kar phir se try karein ya internet connection check karein.");
         }
       };
 
       // Expose sendRealtimeInput compatible helper
       (ws as any).sendRealtimeInput = (input: any) => {
-        if (ws.readyState === WebSocket.OPEN) {
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === 1) {
           ws.send(JSON.stringify({ type: 'realtimeInput', input }));
         }
       };
@@ -1857,45 +1465,6 @@ You have persistent local memory of all past conversations with ${userName || 'D
     }
   };
 
-  // Continuous "Hey Mahi" Wake Word Engine
-  useEffect(() => {
-    if (!isWakeWordEnabled || isActive) {
-      if (wakeWordListenerRef.current) {
-        wakeWordListenerRef.current.stop();
-        wakeWordListenerRef.current = null;
-      }
-      return;
-    }
-
-    if (!WakeWordListener.isSupported()) {
-      return;
-    }
-
-    const listener = new WakeWordListener({
-      onWake: (phrase) => {
-        console.log('Hey Mahi wake-word detected:', phrase);
-        setLastHeardWakeWord(phrase);
-        trackEvent('wake_word_activated');
-        if (!isActive) {
-          startMahi();
-        }
-      },
-      onError: (err) => {
-        console.warn('WakeWord error:', err);
-      },
-    });
-
-    const started = listener.start();
-    if (started) {
-      wakeWordListenerRef.current = listener;
-    }
-
-    return () => {
-      listener.stop();
-      wakeWordListenerRef.current = null;
-    };
-  }, [isWakeWordEnabled, isActive]);
-
   return (
     <div className="fixed inset-0 bg-[#000000] flex flex-col items-center justify-center overflow-hidden font-sans text-white">
       {/* Debug View Toggle */}
@@ -1977,34 +1546,6 @@ You have persistent local memory of all past conversations with ${userName || 'D
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Mobile Controls Header Button */}
-          <motion.button
-            onClick={() => setShowMobileControlCenter(true)}
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-purple-400/40 bg-purple-500/20 text-purple-200 hover:bg-purple-500/30 text-xs font-bold transition-all cursor-pointer shadow-sm"
-            title="Mobile Controls: Call, WhatsApp, SMS, Apps, Torch & Lock Screen"
-          >
-            <Smartphone size={14} className="text-pink-400" />
-            <span className="hidden sm:inline">Mobile Controls</span>
-          </motion.button>
-
-          {/* Quick Wake Word Status Pill */}
-          <motion.button
-            onClick={handleToggleWakeWord}
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            className={`hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium transition-all cursor-pointer ${
-              isWakeWordEnabled
-                ? 'bg-purple-950/60 border-purple-500/40 text-purple-200'
-                : 'bg-white/5 border-white/10 text-white/50'
-            }`}
-            title={isWakeWordEnabled ? '"Hey Mahi" bolkar baat start karein' : 'Wake Word listener off hai'}
-          >
-            <span className={`w-2 h-2 rounded-full ${isWakeWordEnabled ? 'bg-green-400 animate-ping' : 'bg-white/30'}`} />
-            <span>{isWakeWordEnabled ? 'Hey Mahi 🟢' : 'Hey Mahi ⚪'}</span>
-          </motion.button>
-
           {/* Study Mode Header Button */}
           <motion.button
             onClick={() => setShowStudyHub(true)}
@@ -2277,67 +1818,7 @@ You have persistent local memory of all past conversations with ${userName || 'D
 
         {/* Secondary Tools Bar */}
         <div className="flex items-center justify-start sm:justify-center gap-2.5 w-full max-w-md px-2 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden py-1">
-          {/* 1. Camera (Physical Problem Solver) */}
-          <button 
-            onClick={() => {
-              if (isCameraActive) {
-                stopCamera();
-              } else {
-                startCamera();
-              }
-            }}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[11px] font-medium transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-              isCameraActive
-                ? 'bg-pink-600/30 border-pink-400 text-pink-200 shadow-[0_0_12px_rgba(244,63,94,0.4)]'
-                : 'bg-white/5 hover:bg-white/10 border-white/10 text-purple-200'
-            }`}
-            title="Camera on karein"
-          >
-            <Camera size={13} className={isCameraActive ? 'text-pink-400 animate-pulse' : 'text-purple-300'} />
-            <span>{isCameraActive ? 'Camera ON 🟢' : 'Camera'}</span>
-          </button>
-
-          {/* 2. Screen Share */}
-          <button 
-            onClick={() => {
-              if (isScreenSharing) {
-                stopScreenShare();
-              } else {
-                startScreenShare();
-              }
-            }}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[11px] font-medium transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-              isScreenSharing
-                ? 'bg-cyan-600/30 border-cyan-400 text-cyan-200 shadow-[0_0_12px_rgba(6,182,212,0.4)]'
-                : 'bg-white/5 hover:bg-white/10 border-white/10 text-purple-200'
-            }`}
-            title="Screen share karein aur screen problem solve karein"
-          >
-            <ScreenShare size={13} className={isScreenSharing ? 'text-cyan-400 animate-pulse' : 'text-purple-300'} />
-            <span>{isScreenSharing ? 'Screen ON 🟢' : 'Screen Share'}</span>
-          </button>
-
-          {/* 3. Mobile Controls */}
-          <button 
-            onClick={() => setShowMobileControlCenter(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-purple-500/20 hover:bg-purple-500/30 border border-purple-400/40 text-[11px] text-purple-200 font-medium transition-all cursor-pointer whitespace-nowrap shrink-0 shadow-sm"
-            title="Mobile Controls: Call, WhatsApp, SMS, Apps, Torch & Lock Screen"
-          >
-            <Smartphone size={13} className="text-pink-400" />
-            <span>Mobile Controls 📱</span>
-          </button>
-
-          {/* 4. OLED Ambient Lock Standby */}
-          <button 
-            onClick={() => setShowAmbientLockScreen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-purple-600/30 to-pink-600/30 hover:from-purple-600/40 hover:to-pink-600/40 border border-purple-400/40 text-[11px] text-purple-200 font-medium transition-all cursor-pointer whitespace-nowrap shrink-0 shadow-sm"
-            title="OLED Standby: Screen black karke 'Hey Mahi' bolo"
-          >
-            <Moon size={13} className="text-purple-300" />
-            <span>"Hey Mahi" Standby 🌙</span>
-          </button>
-
-          {/* 5. Upload */}
+          {/* Upload */}
           <button 
             onClick={() => fileInputRef.current?.click()}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] text-purple-200 font-medium transition-all cursor-pointer whitespace-nowrap shrink-0"
@@ -2347,7 +1828,7 @@ You have persistent local memory of all past conversations with ${userName || 'D
             <span>Upload</span>
           </button>
 
-          {/* 6. Feedback */}
+          {/* Feedback */}
           <a
             href="https://www.instagram.com/heymahiai?igsh=cXpzcDNxMXYzY2Zt"
             target="_blank"
@@ -2359,7 +1840,7 @@ You have persistent local memory of all past conversations with ${userName || 'D
             <span>Feedback</span>
           </a>
 
-          {/* 7. Study Mode */}
+          {/* Study Mode */}
           <button 
             onClick={() => setShowStudyHub(true)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[11px] font-medium transition-all cursor-pointer whitespace-nowrap shrink-0 ${
@@ -2410,28 +1891,6 @@ You have persistent local memory of all past conversations with ${userName || 'D
           <button onClick={() => navigate('/contact')} className="hover:text-purple-300 transition-colors cursor-pointer">Contact</button>
         </div>
       </div>
-
-      {/* Live Vision Overlay (Camera or Screen Share) */}
-      <AnimatePresence>
-        {(isCameraActive || isScreenSharing) && (
-          <VisionPreview
-            mode={isCameraActive ? 'camera' : 'screen'}
-            stream={isCameraActive ? cameraStream : screenStream}
-            isCallActive={isActive}
-            facingMode={cameraFacingMode}
-            onToggleFacingMode={toggleCameraFacingMode}
-            onClose={() => {
-              if (isCameraActive) stopCamera();
-              if (isScreenSharing) stopScreenShare();
-            }}
-            onScanSnapshot={handleScanSnapshot}
-            onStartCall={() => {
-              if (!isActive) startMahi();
-            }}
-            onAskInChat={handleAskInChat}
-          />
-        )}
-      </AnimatePresence>
 
       {/* Interactive Chat Drawer Modal */}
       <AnimatePresence>
@@ -2537,38 +1996,6 @@ You have persistent local memory of all past conversations with ${userName || 'D
 
               {/* Chat Input Bar */}
               <div className="p-3 bg-[#140b2b] border-t border-purple-900/30 flex items-center gap-2">
-                {/* Camera quick trigger in Chat */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!isCameraActive) {
-                      startCamera();
-                    }
-                  }}
-                  className={`p-2 rounded-full transition-colors cursor-pointer shrink-0 ${
-                    isCameraActive ? 'bg-pink-600 text-white' : 'hover:bg-white/10 text-pink-300 hover:text-white'
-                  }`}
-                  title="Open Camera"
-                >
-                  <Camera size={18} />
-                </button>
-
-                {/* Screen Share quick trigger in Chat */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!isScreenSharing) {
-                      startScreenShare();
-                    }
-                  }}
-                  className={`p-2 rounded-full transition-colors cursor-pointer shrink-0 ${
-                    isScreenSharing ? 'bg-cyan-600 text-white' : 'hover:bg-white/10 text-cyan-300 hover:text-white'
-                  }`}
-                  title="Share Screen"
-                >
-                  <ScreenShare size={18} />
-                </button>
-
                 {/* Upload Image quick trigger in Chat */}
                 <button
                   type="button"
@@ -2752,40 +2179,6 @@ You have persistent local memory of all past conversations with ${userName || 'D
               theme={theme}
             />
           </React.Suspense>
-        )}
-      </AnimatePresence>
-
-      {/* Mobile Control Center Modal */}
-      <AnimatePresence>
-        {showMobileControlCenter && (
-          <MobileControlCenter
-            isOpen={showMobileControlCenter}
-            onClose={() => setShowMobileControlCenter(false)}
-            isWakeWordEnabled={isWakeWordEnabled}
-            onToggleWakeWord={handleToggleWakeWord}
-            onOpenAmbientLock={() => setShowAmbientLockScreen(true)}
-            onStartCallWithPrompt={(prompt) => {
-              setShowMobileControlCenter(false);
-              handleSendTextMessage(prompt);
-              if (!isActive) startMahi();
-            }}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* OLED Ambient Lock Screen Standby ("Hey Mahi" hands-free listener) */}
-      <AnimatePresence>
-        {showAmbientLockScreen && (
-          <AmbientLockScreen
-            isOpen={showAmbientLockScreen}
-            onClose={() => setShowAmbientLockScreen(false)}
-            onWakeVoice={() => {
-              setShowAmbientLockScreen(false);
-              if (!isActive) startMahi();
-            }}
-            isWakeWordActive={isWakeWordEnabled}
-            lastHeardWakeWord={lastHeardWakeWord}
-          />
         )}
       </AnimatePresence>
 
